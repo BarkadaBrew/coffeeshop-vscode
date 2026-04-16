@@ -10,7 +10,6 @@ export function getActiveFileContext(): FileContext | undefined {
 
   const doc = editor.document;
   const cursor = editor.selection.active;
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
   // Extract content around cursor
   const startLine = Math.max(0, cursor.line - CONTEXT_LINES_AROUND_CURSOR);
@@ -33,9 +32,7 @@ export function getActiveFileContext(): FileContext | undefined {
 
   const result: FileContext = {
     path: doc.uri.fsPath,
-    relativePath: workspaceRoot
-      ? doc.uri.fsPath.replace(workspaceRoot + '/', '')
-      : doc.uri.fsPath,
+    relativePath: vscode.workspace.asRelativePath(doc.uri, false),
     language: doc.languageId,
     content,
     cursorLine: cursor.line + 1,
@@ -55,14 +52,12 @@ export function getActiveFileContext(): FileContext | undefined {
 }
 
 export function getOpenFiles(): string[] {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
   return vscode.window.tabGroups.all
     .flatMap((group) => group.tabs)
     .map((tab) => {
       const input = tab.input;
       if (input instanceof vscode.TabInputText) {
-        const p = input.uri.fsPath;
-        return root ? p.replace(root + '/', '') : p;
+        return vscode.workspace.asRelativePath(input.uri, false);
       }
       return null;
     })

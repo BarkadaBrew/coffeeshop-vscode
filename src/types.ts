@@ -1,5 +1,3 @@
-import * as vscode from 'vscode';
-
 export interface CoffeeShopConfig {
   serverUrl: string;
   bridgeToken: string;

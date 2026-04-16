@@ -5,9 +5,12 @@ const SECTION = 'coffeeshop';
 const TOKEN_KEY = 'coffeeshop.bridgeToken';
 
 let secretStorage: vscode.SecretStorage;
+const _onTokenChange = new vscode.EventEmitter<string>();
+export const onTokenChange = _onTokenChange.event;
 
 export function initConfig(context: vscode.ExtensionContext): void {
   secretStorage = context.secrets;
+  context.subscriptions.push(_onTokenChange);
 }
 
 export function getConfig(): Omit<CoffeeShopConfig, 'bridgeToken'> {
@@ -26,6 +29,7 @@ export async function getBridgeToken(): Promise<string | undefined> {
 
 export async function setBridgeToken(token: string): Promise<void> {
   await secretStorage.store(TOKEN_KEY, token);
+  _onTokenChange.fire(token);
 }
 
 export async function getFullConfig(): Promise<CoffeeShopConfig> {

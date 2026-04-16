@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from '../client/connection-manager';
-import { setBridgeToken, getBridgeToken, getConfig } from '../config';
+import { setBridgeToken, getBridgeToken } from '../config';
 import { StatusBar } from '../ui/status-bar';
 
 export function registerCommands(
@@ -56,7 +56,14 @@ export function registerCommands(
       });
       if (token) {
         await setBridgeToken(token);
-        vscode.window.showInformationMessage('Bridge token saved');
+        vscode.window.showInformationMessage('Bridge token saved — reconnecting...');
+        // Auto-reconnect with new token
+        try {
+          await connection.connect();
+          statusBar.update('connected');
+        } catch {
+          statusBar.update('disconnected');
+        }
       }
     })
   );
@@ -94,8 +101,10 @@ export function registerCommands(
     })
   );
 
-  // React to connection state changes
-  connection.onStateChange((state) => {
-    statusBar.update(state);
-  });
+  // Track connection state changes on the status bar
+  context.subscriptions.push(
+    connection.onStateChange((state) => {
+      statusBar.update(state);
+    })
+  );
 }

@@ -1,14 +1,16 @@
 import { EventEmitter } from 'events';
 import * as http from 'http';
+import * as https from 'https';
 import * as crypto from 'crypto';
 import type { BridgeMessage, ConnectionState } from '../types';
 
 /**
  * Minimal WebSocket client using raw HTTP upgrade.
- * No external dependencies — follows coffeeshop-server's zero-dep pattern.
+ * Supports both ws:// and wss:// (HTTP and HTTPS upgrades).
+ * Token sent via Sec-WebSocket-Protocol header, not query string.
  */
 export class WsClient extends EventEmitter {
-  private url: string;
+  private serverUrl: string;
   private token: string;
   private socket: import('net').Socket | null = null;
   private state: ConnectionState = 'disconnected';
@@ -20,8 +22,7 @@ export class WsClient extends EventEmitter {
 
   constructor(serverUrl: string, token: string) {
     super();
-    const wsUrl = serverUrl.replace(/^http/, 'ws');
-    this.url = `${wsUrl}/ws?token=${encodeURIComponent(token)}`;
+    this.serverUrl = serverUrl;
     this.token = token;
   }
 
@@ -33,22 +34,51 @@ export class WsClient extends EventEmitter {
     if (this.destroyed) return;
     this.setState('connecting');
 
-    const parsed = new URL(this.url);
+    const wsUrl = this.serverUrl.replace(/^http/, 'ws');
+    const parsed = new URL(`${wsUrl}/ws`);
+    const isSecure = parsed.protocol === 'wss:';
+    const mod = isSecure ? https : http;
+    const defaultPort = isSecure ? 443 : 80;
     const key = crypto.randomBytes(16).toString('base64');
 
-    const req = http.request({
+    const req = mod.request({
       hostname: parsed.hostname,
-      port: parsed.port || 80,
-      path: parsed.pathname + parsed.search,
+      port: parsed.port || defaultPort,
+      path: parsed.pathname,
       headers: {
         Connection: 'Upgrade',
         Upgrade: 'websocket',
         'Sec-WebSocket-Key': key,
         'Sec-WebSocket-Version': '13',
+        // Send token via subprotocol header instead of query string
+        ...(this.token
+          ? { 'Sec-WebSocket-Protocol': `bridge-token.${this.token}` }
+          : {}),
       },
     });
 
-    req.on('upgrade', (_res, socket, _head) => {
+    // Handle non-upgrade HTTP responses (401, 404, etc.)
+    req.on('response', (res) => {
+      const status = res.statusCode ?? 0;
+      this.emit('error', new Error(`WebSocket upgrade rejected: HTTP ${status}`));
+      res.resume(); // drain
+      this.handleDisconnect();
+    });
+
+    req.on('upgrade', (res, socket, _head) => {
+      // Validate Sec-WebSocket-Accept
+      const expectedAccept = crypto
+        .createHash('sha1')
+        .update(key + '258EAFA5-E914-47DA-95CA-5AB5B13F34C3')
+        .digest('base64');
+      const actualAccept = res.headers['sec-websocket-accept'];
+      if (actualAccept !== expectedAccept) {
+        socket.destroy();
+        this.emit('error', new Error('Invalid Sec-WebSocket-Accept'));
+        this.handleDisconnect();
+        return;
+      }
+
       this.socket = socket;
       this.reconnectDelay = 1000;
       this.setState('connected');
@@ -61,7 +91,6 @@ export class WsClient extends EventEmitter {
       let buffer = Buffer.alloc(0);
       socket.on('data', (chunk: Buffer) => {
         buffer = Buffer.concat([buffer, chunk]);
-        // Simple text frame parser (no fragmentation support needed for JSON messages)
         while (buffer.length >= 2) {
           const secondByte = buffer[1] & 0x7f;
           let payloadLength = secondByte;
@@ -84,7 +113,6 @@ export class WsClient extends EventEmitter {
           buffer = buffer.subarray(offset + payloadLength);
 
           if (opcode === 0x01) {
-            // Text frame
             try {
               const msg = JSON.parse(payload.toString()) as BridgeMessage;
               this.emit('message', msg);
@@ -92,10 +120,8 @@ export class WsClient extends EventEmitter {
               // ignore malformed messages
             }
           } else if (opcode === 0x08) {
-            // Close frame
             socket.end();
           } else if (opcode === 0x09) {
-            // Ping — send pong
             this.sendFrame(0x0a, payload);
           }
         }
@@ -106,6 +132,10 @@ export class WsClient extends EventEmitter {
     });
 
     req.on('error', () => this.handleDisconnect());
+    req.setTimeout(10000, () => {
+      req.destroy();
+      this.handleDisconnect();
+    });
     req.end();
   }
 

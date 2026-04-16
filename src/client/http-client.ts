@@ -7,6 +7,9 @@ import type {
   ToolResult,
 } from '../types';
 
+const DEFAULT_TIMEOUT_MS = 30000;
+const STREAM_TIMEOUT_MS = 120000;
+
 export class HttpClient {
   private baseUrl: string;
   private token: string;
@@ -37,12 +40,18 @@ export class HttpClient {
 
   async *chatStream(
     messages: ChatMessage[],
-    options?: { model?: string; temperature?: number; max_tokens?: number }
+    options?: {
+      model?: string;
+      temperature?: number;
+      max_tokens?: number;
+      signal?: AbortSignal;
+    }
   ): AsyncGenerator<string> {
+    const { signal, ...rest } = options ?? {};
     const body = JSON.stringify({
       messages,
       stream: true,
-      ...options,
+      ...rest,
     });
 
     const url = new URL(this.baseUrl + '/v1/chat/completions');
@@ -64,10 +73,25 @@ export class HttpClient {
                 ? { Authorization: `Bearer ${this.token}` }
                 : {}),
             },
+            timeout: STREAM_TIMEOUT_MS,
           },
           resolve
         );
         req.on('error', reject);
+        req.on('timeout', () => {
+          req.destroy(new Error('Request timed out'));
+        });
+
+        // Abort support for cancellation
+        if (signal) {
+          if (signal.aborted) {
+            req.destroy();
+            reject(new Error('Aborted'));
+            return;
+          }
+          signal.addEventListener('abort', () => req.destroy(), { once: true });
+        }
+
         req.write(body);
         req.end();
       }
@@ -144,6 +168,7 @@ export class HttpClient {
             ...this.channelHeaders(),
             ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
           },
+          timeout: DEFAULT_TIMEOUT_MS,
         },
         async (res) => {
           const text = await this.readBody(res);
@@ -159,6 +184,9 @@ export class HttpClient {
         }
       );
       req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy(new Error('Request timed out'));
+      });
       if (body) req.write(JSON.stringify(body));
       req.end();
     });

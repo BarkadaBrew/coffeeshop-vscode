@@ -68,19 +68,19 @@
     "keybindings": [
       {
         "command": "coffeeshop.askBree",
-        "key": "cmd+shift+b",
-        "mac": "cmd+shift+b"
+        "key": "ctrl+shift+alt+b",
+        "mac": "cmd+shift+alt+b"
       },
       {
         "command": "coffeeshop.explainSelection",
-        "key": "cmd+shift+e",
-        "mac": "cmd+shift+e",
+        "key": "ctrl+shift+alt+e",
+        "mac": "cmd+shift+alt+e",
         "when": "editorHasSelection"
       },
       {
         "command": "coffeeshop.fixErrors",
-        "key": "cmd+shift+f",
-        "mac": "cmd+shift+f"
+        "key": "ctrl+shift+alt+f",
+        "mac": "cmd+shift+alt+f"
       }
     ],
     "configuration": {

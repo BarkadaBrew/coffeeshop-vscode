@@ -10,13 +10,10 @@ const SEVERITY_MAP: Record<number, DiagnosticInfo['severity']> = {
 
 export function getDiagnostics(fileOnly?: string): DiagnosticInfo[] {
   const all = vscode.languages.getDiagnostics();
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
   const results: DiagnosticInfo[] = [];
 
   for (const [uri, diagnostics] of all) {
-    const filePath = root
-      ? uri.fsPath.replace(root + '/', '')
-      : uri.fsPath;
+    const filePath = vscode.workspace.asRelativePath(uri, false);
 
     if (fileOnly && filePath !== fileOnly && uri.fsPath !== fileOnly) {
       continue;
