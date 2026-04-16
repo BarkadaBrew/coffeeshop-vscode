@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import { ConnectionManager } from '../client/connection-manager';
 import { TerminalCapture } from '../context/terminal-context';
 import { buildChatMessages, parseSlashCommand, SLASH_PROMPTS } from '../chat/message-builder';
-import type { ChatMessage, ConnectionState } from '../types';
+import type { ChatMessage } from '../types';
 
 export class BreeChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'coffeeshop.chatView';
@@ -10,13 +11,13 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private history: ChatMessage[] = [];
   private abortController?: AbortController;
+  private isStreaming = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly connection: ConnectionManager,
     private readonly terminal: TerminalCapture
   ) {
-    // Forward connection state changes to the webview
     connection.onStateChange((state) => {
       this.postMessage({ type: 'connectionState', state });
     });
@@ -34,15 +35,15 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this.extensionUri],
     };
 
-    webviewView.webview.html = this.getHtml();
+    const nonce = crypto.randomBytes(16).toString('hex');
+    webviewView.webview.html = this.getHtml(nonce);
 
-    // Send initial connection state
+    // Send initial state
     this.postMessage({
       type: 'connectionState',
       state: this.connection.state,
     });
 
-    // Send available slash commands
     this.postMessage({
       type: 'slashCommands',
       commands: Object.keys(SLASH_PROMPTS).map((name) => ({
@@ -51,10 +52,23 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
       })),
     });
 
+    // Replay history into the new view
+    for (const msg of this.history) {
+      this.postMessage({
+        type: 'historyReplay',
+        role: msg.role,
+        content: msg.content,
+      });
+    }
+
     webviewView.webview.onDidReceiveMessage(async (msg) => {
+      if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
+
       switch (msg.type) {
         case 'sendMessage':
-          await this.handleUserMessage(msg.text);
+          if (typeof msg.text === 'string') {
+            await this.handleUserMessage(msg.text);
+          }
           break;
         case 'cancelStream':
           this.abortController?.abort();
@@ -70,18 +84,19 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
   private async handleUserMessage(text: string): Promise<void> {
     if (!text.trim()) return;
 
+    // Guard against overlapping requests
+    if (this.isStreaming) return;
+
     if (this.connection.state !== 'connected') {
       this.postMessage({
         type: 'breeMessage',
         content: '**Not connected to CoffeeShop server.** Run `CoffeeShop: Connect to Bree` first.',
-        done: true,
       });
       return;
     }
 
     const { command, prompt } = parseSlashCommand(text);
 
-    // Build messages using shared logic
     let messages: ChatMessage[];
     try {
       messages = await buildChatMessages(this.terminal, prompt, command, this.history);
@@ -90,15 +105,17 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
       this.postMessage({
         type: 'breeMessage',
         content: `**Error building context:** ${errMsg}`,
-        done: true,
       });
       return;
     }
 
-    // Add user message to local history
-    this.history.push({ role: 'user', content: text });
+    // Store the expanded form in history so follow-up context is consistent
+    const expandedContent = command
+      ? `${SLASH_PROMPTS[command] ?? ''}\n\n${prompt || '(see context above)'}`
+      : text;
+    this.history.push({ role: 'user', content: expandedContent });
 
-    // Signal the webview to show typing indicator
+    this.isStreaming = true;
     this.postMessage({ type: 'streamStart' });
 
     this.abortController = new AbortController();
@@ -115,10 +132,8 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
         this.postMessage({ type: 'streamChunk', content: chunk });
       }
 
-      // Stream complete
       this.postMessage({ type: 'streamEnd' });
 
-      // Save assistant response to history
       if (fullResponse) {
         this.history.push({ role: 'assistant', content: fullResponse });
       }
@@ -134,6 +149,7 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
       });
       this.postMessage({ type: 'streamEnd' });
     } finally {
+      this.isStreaming = false;
       this.abortController = undefined;
     }
   }
@@ -142,13 +158,13 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage(msg);
   }
 
-  private getHtml(): string {
+  private getHtml(nonce: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -166,7 +182,6 @@ body {
   overflow: hidden;
 }
 
-/* Header */
 .header {
   display: flex;
   align-items: center;
@@ -204,7 +219,6 @@ body {
   color: #000;
 }
 
-/* Messages area */
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -244,7 +258,6 @@ body {
   border: 1px solid var(--vscode-panel-border, #333);
 }
 
-/* Typing indicator */
 .typing-indicator {
   display: none;
   padding: 8px 12px;
@@ -280,7 +293,6 @@ body {
   font-style: italic;
 }
 
-/* Markdown rendering */
 .message-body h1, .message-body h2, .message-body h3,
 .message-body h4, .message-body h5, .message-body h6 {
   margin: 8px 0 4px;
@@ -316,7 +328,6 @@ body {
 .message-body strong { font-weight: 600; }
 .message-body em { font-style: italic; }
 
-/* Code blocks */
 .code-block-wrapper {
   position: relative;
   margin: 8px 0;
@@ -374,7 +385,6 @@ body {
   line-height: 1.5;
 }
 
-/* Welcome */
 .welcome {
   text-align: center;
   padding: 32px 20px;
@@ -396,7 +406,6 @@ body {
   border-radius: 3px;
 }
 
-/* Input area */
 .input-area {
   border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #333));
   padding: 8px;
@@ -451,10 +460,6 @@ body {
 .send-btn:hover {
   background: var(--vscode-button-hoverBackground, #1177bb);
 }
-.send-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 
 .input-hint {
   font-size: 10px;
@@ -463,7 +468,6 @@ body {
   padding-right: 4px;
 }
 
-/* Slash command autocomplete */
 .slash-menu {
   display: none;
   border: 1px solid var(--vscode-panel-border, #333);
@@ -539,7 +543,7 @@ body {
   <div class="input-hint">Enter to send / Shift+Enter for new line</div>
 </div>
 
-<script>
+<script nonce="${nonce}">
 (function() {
   const vscode = acquireVsCodeApi();
 
@@ -557,22 +561,33 @@ body {
   let currentBreeBody = null;
   let currentBreeContent = '';
 
-  // --- Markdown rendering ---
+  // --- Sanitization ---
 
   function escapeHtml(str) {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  /** Only allow http/https URLs — block javascript:, data:, etc. */
+  function sanitizeUrl(url) {
+    try {
+      const parsed = new URL(url, 'https://placeholder.invalid');
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return escapeHtml(url);
+      }
+    } catch {}
+    return '#';
+  }
+
+  // --- Markdown rendering ---
+
   function renderMarkdown(text) {
-    // Split into code blocks and non-code-block segments
     const parts = [];
     let remaining = text;
     const codeBlockRe = /\`\`\`(\w*)\n([\s\S]*?)(\`\`\`|$)/g;
-    let match;
     let lastIndex = 0;
 
-    // Reset regex
     codeBlockRe.lastIndex = 0;
+    let match;
     while ((match = codeBlockRe.exec(remaining)) !== null) {
       if (match.index > lastIndex) {
         parts.push({ type: 'text', content: remaining.slice(lastIndex, match.index) });
@@ -584,7 +599,7 @@ body {
       parts.push({ type: 'text', content: remaining.slice(lastIndex) });
     }
 
-    return parts.map(part => {
+    return parts.map(function(part) {
       if (part.type === 'code') {
         return renderCodeBlock(part.lang, part.content);
       }
@@ -593,87 +608,101 @@ body {
   }
 
   function renderCodeBlock(lang, code) {
-    const id = 'cb-' + Math.random().toString(36).slice(2, 9);
-    const trimmed = code.replace(/\n$/, '');
+    var id = 'cb-' + Math.random().toString(36).slice(2, 9);
+    var trimmed = code.replace(/\\n$/, '');
     return '<div class="code-block-wrapper">' +
       '<div class="code-block-header">' +
         '<span class="code-block-lang">' + escapeHtml(lang || 'code') + '</span>' +
-        '<button class="copy-btn" data-code-id="' + id + '" onclick="copyCode(this)" title="Copy code">Copy</button>' +
+        '<button class="copy-btn" data-code-id="' + id + '" title="Copy code">Copy</button>' +
       '</div>' +
       '<pre><code id="' + id + '">' + escapeHtml(trimmed) + '</code></pre>' +
     '</div>';
   }
 
   function renderInlineMarkdown(text) {
-    let html = escapeHtml(text);
+    // Process by blocks (split on double newlines)
+    var blocks = text.split(/\\n\\n+/);
+    var html = '';
 
-    // Headers (must be at line start)
-    html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
-    html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
-    html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
-    html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
-    html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+    for (var b = 0; b < blocks.length; b++) {
+      var block = blocks[b].trim();
+      if (!block) continue;
 
-    // Bold + italic
-    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-    // Bold
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // Italic
-    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      // Headers
+      var headerMatch = block.match(/^(#{1,6})\\s+(.+)$/);
+      if (headerMatch) {
+        var level = headerMatch[1].length;
+        html += '<h' + level + '>' + renderInline(headerMatch[2]) + '</h' + level + '>';
+        continue;
+      }
 
-    // Inline code
-    html = html.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+      // Unordered list
+      if (/^[*-]\\s+/.test(block)) {
+        var items = block.split(/\\n/).filter(function(l) { return l.trim(); });
+        html += '<ul>';
+        for (var i = 0; i < items.length; i++) {
+          html += '<li>' + renderInline(items[i].replace(/^\\s*[*-]\\s+/, '')) + '</li>';
+        }
+        html += '</ul>';
+        continue;
+      }
 
-    // Links [text](url)
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" title="$2">$1</a>');
+      // Ordered list
+      if (/^\\d+\\.\\s+/.test(block)) {
+        var items = block.split(/\\n/).filter(function(l) { return l.trim(); });
+        html += '<ol>';
+        for (var i = 0; i < items.length; i++) {
+          html += '<li>' + renderInline(items[i].replace(/^\\s*\\d+\\.\\s+/, '')) + '</li>';
+        }
+        html += '</ol>';
+        continue;
+      }
 
-    // Unordered lists
-    html = html.replace(/^(\s*)[*-]\s+(.+)$/gm, function(_match, indent, item) {
-      return '<li>' + item + '</li>';
-    });
-    // Wrap consecutive <li> in <ul>
-    html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-
-    // Ordered lists
-    html = html.replace(/^(\s*)\d+\.\s+(.+)$/gm, '<li>$2</li>');
-
-    // Line breaks — double newline becomes paragraph, single becomes <br>
-    html = html.replace(/\n\n+/g, '</p><p>');
-    html = html.replace(/\n/g, '<br>');
-
-    // Wrap in paragraph if not already block-level
-    if (html && !html.startsWith('<h') && !html.startsWith('<ul') && !html.startsWith('<ol')) {
-      html = '<p>' + html + '</p>';
+      // Paragraph
+      html += '<p>' + renderInline(block).replace(/\\n/g, '<br>') + '</p>';
     }
-
-    // Clean up empty paragraphs
-    html = html.replace(/<p><\/p>/g, '');
-    html = html.replace(/<p><br><\/p>/g, '');
 
     return html;
   }
 
+  function renderInline(text) {
+    var s = escapeHtml(text);
+    // Bold + italic
+    s = s.replace(/\\*\\*\\*(.+?)\\*\\*\\*/g, '<strong><em>$1</em></strong>');
+    // Bold
+    s = s.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+    // Italic
+    s = s.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
+    // Inline code
+    s = s.replace(/\\\`([^\\\`]+)\\\`/g, '<code>$1</code>');
+    // Links — sanitize URLs
+    s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(_m, label, url) {
+      return '<a href="' + sanitizeUrl(url) + '" title="' + escapeHtml(url) + '">' + label + '</a>';
+    });
+    return s;
+  }
+
   // --- Copy code ---
-  window.copyCode = function(btn) {
-    const codeId = btn.getAttribute('data-code-id');
-    const codeEl = document.getElementById(codeId);
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.copy-btn');
+    if (!btn) return;
+    var codeId = btn.getAttribute('data-code-id');
+    var codeEl = document.getElementById(codeId);
     if (!codeEl) return;
 
-    const text = codeEl.textContent || '';
-    navigator.clipboard.writeText(text).then(() => {
-      const original = btn.textContent;
+    var text = codeEl.textContent || '';
+    navigator.clipboard.writeText(text).then(function() {
+      var original = btn.textContent;
       btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = original; }, 2000);
-    }).catch(() => {
-      // Fallback: select text
-      const range = document.createRange();
+      setTimeout(function() { btn.textContent = original; }, 2000);
+    }).catch(function() {
+      var range = document.createRange();
       range.selectNodeContents(codeEl);
-      const sel = window.getSelection();
+      var sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(range);
     });
-  };
+  });
 
   // --- Scroll management ---
   function scrollToBottom() {
@@ -687,23 +716,32 @@ body {
   // --- Add messages ---
   function addUserMessage(text) {
     welcomeEl.style.display = 'none';
-    const div = document.createElement('div');
+    var div = document.createElement('div');
     div.className = 'message user';
-    div.innerHTML =
-      '<div class="message-header">You</div>' +
-      '<div class="message-body">' + escapeHtml(text) + '</div>';
+    var header = document.createElement('div');
+    header.className = 'message-header';
+    header.textContent = 'You';
+    var body = document.createElement('div');
+    body.className = 'message-body';
+    body.textContent = text;
+    div.appendChild(header);
+    div.appendChild(body);
     messagesEl.appendChild(div);
     scrollToBottom();
   }
 
   function startBreeMessage() {
-    const div = document.createElement('div');
+    var div = document.createElement('div');
     div.className = 'message bree';
-    div.innerHTML =
-      '<div class="message-header">Bree</div>' +
-      '<div class="message-body"></div>';
+    var header = document.createElement('div');
+    header.className = 'message-header';
+    header.textContent = 'Bree';
+    var body = document.createElement('div');
+    body.className = 'message-body';
+    div.appendChild(header);
+    div.appendChild(body);
     messagesEl.appendChild(div);
-    currentBreeBody = div.querySelector('.message-body');
+    currentBreeBody = body;
     currentBreeContent = '';
     scrollToBottom();
   }
@@ -711,7 +749,7 @@ body {
   function appendToCurrentBree(chunk) {
     if (!currentBreeBody) return;
     currentBreeContent += chunk;
-    const shouldScroll = isNearBottom();
+    var shouldScroll = isNearBottom();
     currentBreeBody.innerHTML = renderMarkdown(currentBreeContent);
     if (shouldScroll) scrollToBottom();
   }
@@ -733,8 +771,8 @@ body {
       return;
     }
 
-    const query = text.slice(1).toLowerCase();
-    const matches = slashCommands.filter(c => c.name.startsWith(query));
+    var query = text.slice(1).toLowerCase();
+    var matches = slashCommands.filter(function(c) { return c.name.startsWith(query); });
 
     if (matches.length === 0) {
       slashMenuEl.classList.remove('visible');
@@ -742,19 +780,18 @@ body {
       return;
     }
 
-    slashMenuEl.innerHTML = matches.map((cmd, i) =>
-      '<div class="slash-item' + (i === slashMenuIndex ? ' selected' : '') +
-      '" data-name="' + cmd.name + '">' +
-        '<span class="slash-item-name">/' + cmd.name + '</span>' +
-        '<span class="slash-item-desc">' + escapeHtml(cmd.description) + '</span>' +
-      '</div>'
-    ).join('');
+    slashMenuEl.innerHTML = matches.map(function(cmd, i) {
+      return '<div class="slash-item' + (i === slashMenuIndex ? ' selected' : '') +
+        '" data-name="' + escapeHtml(cmd.name) + '">' +
+          '<span class="slash-item-name">/' + escapeHtml(cmd.name) + '</span>' +
+          '<span class="slash-item-desc">' + escapeHtml(cmd.description) + '</span>' +
+        '</div>';
+    }).join('');
 
     slashMenuEl.classList.add('visible');
 
-    // Click handlers
-    slashMenuEl.querySelectorAll('.slash-item').forEach(item => {
-      item.addEventListener('click', () => {
+    slashMenuEl.querySelectorAll('.slash-item').forEach(function(item) {
+      item.addEventListener('click', function() {
         inputEl.value = '/' + item.getAttribute('data-name') + ' ';
         slashMenuEl.classList.remove('visible');
         inputEl.focus();
@@ -768,8 +805,21 @@ body {
     inputEl.style.height = Math.min(inputEl.scrollHeight, 150) + 'px';
   }
 
+  function setStreamingMode(streaming) {
+    isStreaming = streaming;
+    if (streaming) {
+      sendBtn.textContent = 'Stop';
+      sendBtn.onclick = function() {
+        vscode.postMessage({ type: 'cancelStream' });
+      };
+    } else {
+      sendBtn.textContent = 'Send';
+      sendBtn.onclick = sendMessage;
+    }
+  }
+
   function sendMessage() {
-    const text = inputEl.value.trim();
+    var text = inputEl.value.trim();
     if (!text || isStreaming) return;
 
     addUserMessage(text);
@@ -780,30 +830,29 @@ body {
     vscode.postMessage({ type: 'sendMessage', text: text });
   }
 
-  inputEl.addEventListener('input', () => {
+  inputEl.addEventListener('input', function() {
     autoResize();
     updateSlashMenu(inputEl.value);
   });
 
-  inputEl.addEventListener('keydown', (e) => {
-    // Slash menu navigation
+  inputEl.addEventListener('keydown', function(e) {
     if (slashMenuEl.classList.contains('visible')) {
-      const items = slashMenuEl.querySelectorAll('.slash-item');
+      var items = slashMenuEl.querySelectorAll('.slash-item');
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         slashMenuIndex = Math.min(slashMenuIndex + 1, items.length - 1);
-        items.forEach((el, i) => el.classList.toggle('selected', i === slashMenuIndex));
+        items.forEach(function(el, i) { el.classList.toggle('selected', i === slashMenuIndex); });
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         slashMenuIndex = Math.max(slashMenuIndex - 1, 0);
-        items.forEach((el, i) => el.classList.toggle('selected', i === slashMenuIndex));
+        items.forEach(function(el, i) { el.classList.toggle('selected', i === slashMenuIndex); });
         return;
       }
       if (e.key === 'Tab' || (e.key === 'Enter' && slashMenuIndex >= 0)) {
         e.preventDefault();
-        const selected = items[Math.max(slashMenuIndex, 0)];
+        var selected = items[Math.max(slashMenuIndex, 0)];
         if (selected) {
           inputEl.value = '/' + selected.getAttribute('data-name') + ' ';
           slashMenuEl.classList.remove('visible');
@@ -818,7 +867,6 @@ body {
       }
     }
 
-    // Send on Enter, newline on Shift+Enter
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
@@ -828,8 +876,8 @@ body {
   sendBtn.addEventListener('click', sendMessage);
 
   // --- Message handling from extension ---
-  window.addEventListener('message', (event) => {
-    const msg = event.data;
+  window.addEventListener('message', function(event) {
+    var msg = event.data;
 
     switch (msg.type) {
       case 'connectionState':
@@ -842,12 +890,7 @@ body {
         break;
 
       case 'streamStart':
-        isStreaming = true;
-        sendBtn.disabled = true;
-        sendBtn.textContent = 'Stop';
-        sendBtn.onclick = () => {
-          vscode.postMessage({ type: 'cancelStream' });
-        };
+        setStreamingMode(true);
         typingEl.classList.add('visible');
         startBreeMessage();
         break;
@@ -858,20 +901,27 @@ body {
         break;
 
       case 'streamEnd':
-        isStreaming = false;
-        sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
-        sendBtn.onclick = sendMessage;
+        setStreamingMode(false);
         typingEl.classList.remove('visible');
         finishBreeMessage();
         break;
 
       case 'breeMessage':
-        // Non-streamed message (e.g., error)
         welcomeEl.style.display = 'none';
         startBreeMessage();
         appendToCurrentBree(msg.content);
         finishBreeMessage();
+        break;
+
+      case 'historyReplay':
+        welcomeEl.style.display = 'none';
+        if (msg.role === 'user') {
+          addUserMessage(msg.content);
+        } else {
+          startBreeMessage();
+          appendToCurrentBree(msg.content);
+          finishBreeMessage();
+        }
         break;
 
       case 'historyCleared':
@@ -882,7 +932,6 @@ body {
     }
   });
 
-  // Focus input on load
   inputEl.focus();
 })();
 </script>

@@ -31,9 +31,11 @@ export class TerminalCapture implements vscode.Disposable {
   private disposables: vscode.Disposable[] = [];
 
   activate(): void {
-    if (vscode.window.onDidWriteTerminalData) {
-      const handler = vscode.window.onDidWriteTerminalData(
-        (e: vscode.TerminalDataWriteEvent) => {
+    // onDidWriteTerminalData may not be in @types/vscode yet — check at runtime
+    const win = vscode.window as any;
+    if (typeof win.onDidWriteTerminalData === 'function') {
+      const handler = win.onDidWriteTerminalData(
+        (e: { terminal: vscode.Terminal; data: string }) => {
           const lines = e.data.split('\n');
           this.buffer.push(...lines);
           if (this.buffer.length > MAX_BUFFER_LINES) {

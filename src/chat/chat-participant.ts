@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from '../client/connection-manager';
 import { TerminalCapture } from '../context/terminal-context';
-import { buildChatMessages, SLASH_PROMPTS } from './message-builder';
+import { buildChatMessages } from './message-builder';
 import type { ChatMessage } from '../types';
 
 export function registerChatParticipant(
