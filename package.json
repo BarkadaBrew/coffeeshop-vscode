@@ -22,6 +22,24 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "coffeeshop",
+          "title": "CoffeeShop",
+          "icon": "media/bree-icon.png"
+        }
+      ]
+    },
+    "views": {
+      "coffeeshop": [
+        {
+          "type": "webview",
+          "id": "coffeeshop.chatView",
+          "name": "Bree Chat"
+        }
+      ]
+    },
     "chatParticipants": [
       {
         "id": "bree",
