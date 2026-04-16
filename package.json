@@ -1,0 +1,147 @@
+{
+  "name": "coffeeshop-vscode",
+  "displayName": "CoffeeShop — Bree AI Copilot",
+  "description": "Bree as your AI coding copilot — develop, debug, and learn together",
+  "version": "0.1.0",
+  "publisher": "BarkadaBrew",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BarkadaBrew/coffeeshop-vscode.git"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "bree",
+        "name": "bree",
+        "fullName": "Bree — CoffeeShop Copilot",
+        "description": "AI coding copilot that develops, debugs, and mentors",
+        "isSticky": true,
+        "commands": [
+          { "name": "explain", "description": "Explain the selected code" },
+          { "name": "fix", "description": "Fix errors in the current file" },
+          { "name": "test", "description": "Generate tests for the selected code" },
+          { "name": "commit", "description": "Suggest a commit message" },
+          { "name": "review", "description": "Review the current file or diff" }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "coffeeshop.connect",
+        "title": "CoffeeShop: Connect to Bree"
+      },
+      {
+        "command": "coffeeshop.disconnect",
+        "title": "CoffeeShop: Disconnect"
+      },
+      {
+        "command": "coffeeshop.setToken",
+        "title": "CoffeeShop: Set Bridge Token"
+      },
+      {
+        "command": "coffeeshop.askBree",
+        "title": "CoffeeShop: Ask Bree"
+      },
+      {
+        "command": "coffeeshop.explainSelection",
+        "title": "CoffeeShop: Explain Selection",
+        "enablement": "editorHasSelection"
+      },
+      {
+        "command": "coffeeshop.fixErrors",
+        "title": "CoffeeShop: Fix Errors in File"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "coffeeshop.askBree",
+        "key": "cmd+shift+b",
+        "mac": "cmd+shift+b"
+      },
+      {
+        "command": "coffeeshop.explainSelection",
+        "key": "cmd+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "coffeeshop.fixErrors",
+        "key": "cmd+shift+f",
+        "mac": "cmd+shift+f"
+      }
+    ],
+    "configuration": {
+      "title": "CoffeeShop",
+      "properties": {
+        "coffeeshop.serverUrl": {
+          "type": "string",
+          "default": "http://10.0.100.232:3777",
+          "description": "URL of the CoffeeShop daemon server"
+        },
+        "coffeeshop.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically connect to Bree on startup"
+        },
+        "coffeeshop.contextBudget": {
+          "type": "number",
+          "default": 5000,
+          "description": "Max tokens of workspace context to send per message"
+        },
+        "coffeeshop.confirmTerminalCommands": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask for confirmation before running terminal commands"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "coffeeshop.explainSelection",
+          "when": "editorHasSelection",
+          "group": "coffeeshop"
+        },
+        {
+          "command": "coffeeshop.fixErrors",
+          "group": "coffeeshop"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "dev": "webpack --mode development",
+    "lint": "eslint src/**/*.ts",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.95.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "ts-loader": "^9.5.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0",
+    "webpack": "^5.95.0",
+    "webpack-cli": "^5.1.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}
