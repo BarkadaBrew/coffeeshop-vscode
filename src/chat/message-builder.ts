@@ -14,16 +14,20 @@ export const SLASH_PROMPTS: Record<string, string> = {
     'Review this code for bugs, performance issues, security concerns, and readability. Be direct and actionable.',
 };
 
-export const SYSTEM_PROMPT_LINES = [
-  'You are Bree, an AI copilot in VS Code. You are helping Todd write, debug, and understand code.',
-  'You have access to his workspace context below. Use it to give precise, contextual answers.',
-  'When suggesting code changes, use fenced code blocks with the filename as the language tag comment.',
-  'Be direct, concise, and mentor-like. Todd is a senior PM who codes — respect his intelligence but guide when helpful.',
-];
+/**
+ * The model to request from the daemon. "bree" triggers the character
+ * path which injects soul.md, memory, RAG vault context, and tools
+ * automatically — no need to duplicate persona instructions here.
+ */
+export const DAEMON_MODEL = 'bree';
 
 /**
  * Build the full messages array for a chat request. Shared between
  * the Chat Participant handler and the Webview panel.
+ *
+ * The daemon injects Bree's full identity (soul.md, memory, RAG) when
+ * model="bree" is requested. This function only adds workspace context
+ * as a system message — the daemon prepends the persona prompt.
  */
 export async function buildChatMessages(
   terminal: TerminalCapture,
@@ -49,9 +53,10 @@ export async function buildChatMessages(
 
   const messages: ChatMessage[] = [];
 
+  // Workspace context as system message — daemon adds soul.md on top
   messages.push({
     role: 'system',
-    content: [...SYSTEM_PROMPT_LINES, '', contextContent].join('\n'),
+    content: contextContent,
   });
 
   // Append conversation history
@@ -72,7 +77,6 @@ export async function buildChatMessages(
 
 /**
  * Parse a user input string for a leading slash command.
- * Returns the command name (without slash) and the remaining prompt.
  */
 export function parseSlashCommand(
   input: string

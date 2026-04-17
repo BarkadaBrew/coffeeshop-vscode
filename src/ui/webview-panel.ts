@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { ConnectionManager } from '../client/connection-manager';
 import { TerminalCapture } from '../context/terminal-context';
-import { buildChatMessages, parseSlashCommand, SLASH_PROMPTS } from '../chat/message-builder';
+import { buildChatMessages, parseSlashCommand, SLASH_PROMPTS, DAEMON_MODEL } from '../chat/message-builder';
 import type { ChatMessage } from '../types';
 
 export class BreeChatViewProvider implements vscode.WebviewViewProvider {
@@ -123,6 +123,7 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       const streamGen = this.connection.client.chatStream(messages, {
+        model: DAEMON_MODEL,
         signal: this.abortController.signal,
       });
 

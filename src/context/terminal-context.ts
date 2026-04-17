@@ -31,19 +31,25 @@ export class TerminalCapture implements vscode.Disposable {
   private disposables: vscode.Disposable[] = [];
 
   activate(): void {
-    // onDidWriteTerminalData may not be in @types/vscode yet — check at runtime
-    const win = vscode.window as any;
-    if (typeof win.onDidWriteTerminalData === 'function') {
-      const handler = win.onDidWriteTerminalData(
-        (e: { terminal: vscode.Terminal; data: string }) => {
-          const lines = e.data.split('\n');
-          this.buffer.push(...lines);
-          if (this.buffer.length > MAX_BUFFER_LINES) {
-            this.buffer = this.buffer.slice(-MAX_BUFFER_LINES);
+    // onDidWriteTerminalData is a proposed API in VS Codium.
+    // We must catch the error at registration time — VS Codium throws
+    // even if we check typeof first, because it validates at access.
+    try {
+      const win = vscode.window as any;
+      if (typeof win.onDidWriteTerminalData === 'function') {
+        const handler = win.onDidWriteTerminalData(
+          (e: { terminal: vscode.Terminal; data: string }) => {
+            const lines = e.data.split('\n');
+            this.buffer.push(...lines);
+            if (this.buffer.length > MAX_BUFFER_LINES) {
+              this.buffer = this.buffer.slice(-MAX_BUFFER_LINES);
+            }
           }
-        }
-      );
-      this.disposables.push(handler);
+        );
+        this.disposables.push(handler);
+      }
+    } catch {
+      // Terminal capture unavailable (proposed API not enabled) — degrade gracefully
     }
   }
 

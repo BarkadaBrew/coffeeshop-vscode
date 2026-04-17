@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from '../client/connection-manager';
 import { TerminalCapture } from '../context/terminal-context';
-import { buildChatMessages } from './message-builder';
+import { buildChatMessages, DAEMON_MODEL } from './message-builder';
 import type { ChatMessage } from '../types';
 
 export function registerChatParticipant(
@@ -50,7 +50,7 @@ export function registerChatParticipant(
     const cancelListener = token.onCancellationRequested(() => abort.abort());
 
     try {
-      const streamGen = connection.client.chatStream(messages, { signal: abort.signal });
+      const streamGen = connection.client.chatStream(messages, { model: DAEMON_MODEL, signal: abort.signal });
       for await (const chunk of streamGen) {
         if (token.isCancellationRequested) break;
         stream.markdown(chunk);
