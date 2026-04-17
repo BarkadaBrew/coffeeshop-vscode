@@ -24,7 +24,13 @@ export function getConfig(): Omit<CoffeeShopConfig, 'bridgeToken'> {
 }
 
 export async function getBridgeToken(): Promise<string | undefined> {
-  return secretStorage.get(TOKEN_KEY);
+  // Try secret storage first, fall back to settings.json
+  const secret = await secretStorage.get(TOKEN_KEY);
+  if (secret) return secret;
+
+  const cfg = vscode.workspace.getConfiguration(SECTION);
+  const settingsToken = cfg.get<string>('bridgeToken', '');
+  return settingsToken || undefined;
 }
 
 export async function setBridgeToken(token: string): Promise<void> {

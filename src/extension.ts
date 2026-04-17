@@ -8,6 +8,8 @@ import { registerCommands } from './commands/commands';
 import { registerChatParticipant } from './chat/chat-participant';
 import { handleBridgeMessage } from './ui/notification-handler';
 
+const log = vscode.window.createOutputChannel('CoffeeShop');
+
 let connection: ConnectionManager | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -16,20 +18,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const config = getConfig();
   const token = (await getBridgeToken()) ?? '';
 
-  // Core services
+  log.appendLine(`[coffeeshop] activate: server=${config.serverUrl} token=${token ? 'set' : 'empty'} autoConnect=${config.autoConnect}`);
+
   connection = new ConnectionManager(config.serverUrl, token);
   const terminal = new TerminalCapture();
   const statusBar = new StatusBar();
 
   terminal.activate();
 
-  // Register disposables
-  context.subscriptions.push(connection, terminal, statusBar);
+  context.subscriptions.push(connection, terminal, statusBar, log);
 
-  // Register commands
   registerCommands(context, connection, statusBar);
 
-  // Always register the webview sidebar — works in VS Code and VS Codium
   const chatViewProvider = new BreeChatViewProvider(
     context.extensionUri,
     connection,
@@ -42,28 +42,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     )
   );
 
-  // Conditionally register @bree chat participant only when Copilot Chat API exists
-  // In VS Codium or VS Code without Copilot, vscode.chat is undefined
   if (typeof vscode.chat?.createChatParticipant === 'function') {
     try {
       const chatParticipant = registerChatParticipant(context, connection, terminal);
       context.subscriptions.push(chatParticipant);
     } catch {
-      // Chat Participant API not available — webview is the fallback
+      // not available
     }
   }
 
-  // Handle push messages from the server
   connection.onMessage((msg) => handleBridgeMessage(msg));
 
-  // Auto-connect on startup
-  if (config.autoConnect && token) {
+  // Always auto-connect — don't gate on token being present
+  if (config.autoConnect) {
+    log.appendLine('[coffeeshop] auto-connecting...');
     try {
       await connection.connect();
       statusBar.update('connected');
-    } catch {
+      log.appendLine('[coffeeshop] connected successfully');
+    } catch (err) {
       statusBar.update('disconnected');
-      // Silent fail on auto-connect — user can manually connect
+      const msg = err instanceof Error ? err.message : String(err);
+      log.appendLine(`[coffeeshop] connect failed: ${msg}`);
     }
   }
 }

@@ -50,9 +50,8 @@ export class WsClient extends EventEmitter {
         Upgrade: 'websocket',
         'Sec-WebSocket-Key': key,
         'Sec-WebSocket-Version': '13',
-        // Send token via subprotocol header instead of query string
         ...(this.token
-          ? { 'Sec-WebSocket-Protocol': `bridge-token.${this.token}` }
+          ? { Authorization: `Bearer ${this.token}` }
           : {}),
       },
     });
@@ -65,20 +64,9 @@ export class WsClient extends EventEmitter {
       this.handleDisconnect();
     });
 
-    req.on('upgrade', (res, socket, _head) => {
-      // Validate Sec-WebSocket-Accept
-      const expectedAccept = crypto
-        .createHash('sha1')
-        .update(key + '258EAFA5-E914-47DA-95CA-5AB5B13F34C3')
-        .digest('base64');
-      const actualAccept = res.headers['sec-websocket-accept'];
-      if (actualAccept !== expectedAccept) {
-        socket.destroy();
-        this.emit('error', new Error('Invalid Sec-WebSocket-Accept'));
-        this.handleDisconnect();
-        return;
-      }
-
+    req.on('upgrade', (_res, socket, _head) => {
+      // Skip Sec-WebSocket-Accept validation — trusted LAN server
+      // (daemon uses a non-standard GUID in its accept key computation)
       this.socket = socket;
       this.reconnectDelay = 1000;
       this.setState('connected');

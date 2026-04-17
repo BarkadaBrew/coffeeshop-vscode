@@ -2,7 +2,7 @@
   "name": "coffeeshop-vscode",
   "displayName": "CoffeeShop — Bree AI Copilot",
   "description": "Bree as your AI coding copilot — develop, debug, and learn together",
-  "version": "0.1.2",
+  "version": "0.2.1",
   "publisher": "BarkadaBrew",
   "license": "MIT",
   "repository": {
@@ -108,6 +108,11 @@
           "type": "string",
           "default": "http://10.0.100.232:3777",
           "description": "URL of the CoffeeShop daemon server"
+        },
+        "coffeeshop.bridgeToken": {
+          "type": "string",
+          "default": "",
+          "description": "Bridge token for authenticating with the CoffeeShop daemon"
         },
         "coffeeshop.autoConnect": {
           "type": "boolean",
