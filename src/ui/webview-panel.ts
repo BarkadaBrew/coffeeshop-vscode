@@ -92,11 +92,20 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
     if (this.isStreaming) return;
 
     if (this.connection.state !== 'connected') {
+      // Try to reconnect automatically
       this.postMessage({
         type: 'breeMessage',
-        content: '**Not connected to CoffeeShop server.** Run `CoffeeShop: Connect to Bree` first.',
+        content: '**Reconnecting to Bree...**',
       });
-      return;
+      try {
+        await this.connection.connect();
+      } catch {
+        this.postMessage({
+          type: 'breeMessage',
+          content: '**Could not connect to CoffeeShop server.** Run `CoffeeShop: Connect to Bree` from the command palette.',
+        });
+        return;
+      }
     }
 
     const { command, prompt } = parseSlashCommand(text);

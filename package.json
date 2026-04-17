@@ -2,7 +2,7 @@
   "name": "coffeeshop-vscode",
   "displayName": "CoffeeShop — Bree AI Copilot",
   "description": "Bree as your AI coding copilot — develop, debug, and learn together",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "BarkadaBrew",
   "license": "MIT",
   "repository": {

@@ -5,14 +5,20 @@ import { WsClient } from './ws-client';
 import { getConfig, getBridgeToken, onTokenChange } from '../config';
 import type { BridgeMessage, ConnectionState } from '../types';
 
+const HEALTH_INTERVAL_MS = 30000;
+const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
+
 export class ConnectionManager implements vscode.Disposable {
   private http: HttpClient;
   private ws: WsClient | null = null;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
   private _state: ConnectionState = 'disconnected';
   private _onStateChange = new vscode.EventEmitter<ConnectionState>();
   private _onMessage = new vscode.EventEmitter<BridgeMessage>();
   private disposables: vscode.Disposable[] = [];
+  private shouldAutoReconnect = false;
 
   readonly onStateChange = this._onStateChange.event;
   readonly onMessage = this._onMessage.event;
@@ -20,7 +26,6 @@ export class ConnectionManager implements vscode.Disposable {
   constructor(serverUrl: string, token: string) {
     this.http = new HttpClient(serverUrl, token);
 
-    // Update HTTP client when token changes
     this.disposables.push(
       onTokenChange((newToken) => {
         this.http.updateToken(newToken);
@@ -37,11 +42,15 @@ export class ConnectionManager implements vscode.Disposable {
   }
 
   async connect(): Promise<void> {
-    // Tear down any existing connection first (idempotent)
+    this.shouldAutoReconnect = true;
+    this.reconnectAttempt = 0;
+    await this.doConnect();
+  }
+
+  private async doConnect(): Promise<void> {
     this.teardown();
 
-    this._state = 'connecting';
-    this._onStateChange.fire('connecting');
+    this.setState('connecting');
 
     try {
       const health = await this.http.health();
@@ -49,13 +58,10 @@ export class ConnectionManager implements vscode.Disposable {
         throw new Error(`Server unhealthy: ${health.status}`);
       }
 
-      // Register as a VS Code client
-      await this.http.tunnelRegister(`vscode-${os.hostname()}`).catch(() => {
-        // tunnel registration is optional — server may not support it
-      });
+      await this.http.tunnelRegister(`vscode-${os.hostname()}`).catch(() => {});
 
-      this._state = 'connected';
-      this._onStateChange.fire('connected');
+      this.reconnectAttempt = 0;
+      this.setState('connected');
 
       // Start WebSocket for push events
       const config = getConfig();
@@ -65,33 +71,60 @@ export class ConnectionManager implements vscode.Disposable {
       this.ws.on('message', (msg: BridgeMessage) => this._onMessage.fire(msg));
       this.ws.connect();
 
-      // Periodic health check every 60s with recovery
+      // Health check + auto-reconnect watchdog
       this.healthTimer = setInterval(async () => {
         try {
           await this.http.health();
-          // Recover from transient reconnecting state
           if (this._state === 'reconnecting') {
-            this._state = 'connected';
-            this._onStateChange.fire('connected');
+            this.reconnectAttempt = 0;
+            this.setState('connected');
           }
         } catch {
           if (this._state === 'connected') {
-            this._state = 'reconnecting';
-            this._onStateChange.fire('reconnecting');
+            this.setState('reconnecting');
+            this.scheduleReconnect();
           }
         }
-      }, 60000);
+      }, HEALTH_INTERVAL_MS);
     } catch (err) {
-      this._state = 'disconnected';
-      this._onStateChange.fire('disconnected');
+      if (this.shouldAutoReconnect) {
+        this.setState('reconnecting');
+        this.scheduleReconnect();
+      } else {
+        this.setState('disconnected');
+      }
       throw err;
     }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
+
+    const delay = RECONNECT_DELAYS[
+      Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)
+    ];
+    this.reconnectAttempt++;
+
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      if (!this.shouldAutoReconnect) return;
+
+      try {
+        await this.doConnect();
+      } catch {
+        // doConnect will schedule another reconnect
+      }
+    }, delay);
   }
 
   private teardown(): void {
     if (this.healthTimer) {
       clearInterval(this.healthTimer);
       this.healthTimer = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
     if (this.ws) {
       this.ws.disconnect();
@@ -100,9 +133,15 @@ export class ConnectionManager implements vscode.Disposable {
   }
 
   disconnect(): void {
+    this.shouldAutoReconnect = false;
     this.teardown();
-    this._state = 'disconnected';
-    this._onStateChange.fire('disconnected');
+    this.setState('disconnected');
+  }
+
+  private setState(state: ConnectionState): void {
+    if (this._state === state) return;
+    this._state = state;
+    this._onStateChange.fire(state);
   }
 
   dispose(): void {
