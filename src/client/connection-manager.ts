@@ -50,6 +50,13 @@ export class ConnectionManager implements vscode.Disposable {
   private async doConnect(): Promise<void> {
     this.teardown();
 
+    // Re-read config on every connect so serverUrl changes take effect
+    const config = getConfig();
+    const token = (await getBridgeToken()) ?? '';
+
+    // Rebuild HTTP client with current config
+    this.http = new HttpClient(config.serverUrl, token);
+
     this.setState('connecting');
 
     try {
@@ -63,12 +70,10 @@ export class ConnectionManager implements vscode.Disposable {
       this.reconnectAttempt = 0;
       this.setState('connected');
 
-      // Start WebSocket for push events
-      const config = getConfig();
-      const token = (await getBridgeToken()) ?? '';
-
+      // Start WebSocket using the same serverUrl as HTTP
       this.ws = new WsClient(config.serverUrl, token);
       this.ws.on('message', (msg: BridgeMessage) => this._onMessage.fire(msg));
+      this.ws.on('error', () => {}); // Swallow WS errors — non-fatal
       this.ws.connect();
 
       // Health check + auto-reconnect watchdog

@@ -7,7 +7,7 @@ import type { BridgeMessage, ConnectionState } from '../types';
 /**
  * Minimal WebSocket client using raw HTTP upgrade.
  * Supports both ws:// and wss:// (HTTP and HTTPS upgrades).
- * Token sent via Sec-WebSocket-Protocol header, not query string.
+ * Token sent via Authorization header.
  */
 export class WsClient extends EventEmitter {
   private serverUrl: string;
@@ -19,6 +19,7 @@ export class WsClient extends EventEmitter {
   private maxReconnectDelay = 30000;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private destroyed = false;
+  private disconnecting = false; // guard against duplicate handleDisconnect
 
   constructor(serverUrl: string, token: string) {
     super();
@@ -32,6 +33,7 @@ export class WsClient extends EventEmitter {
 
   connect(): void {
     if (this.destroyed) return;
+    this.disconnecting = false;
     this.setState('connecting');
 
     const wsUrl = this.serverUrl.replace(/^http/, 'ws');
@@ -58,8 +60,6 @@ export class WsClient extends EventEmitter {
 
     // Handle non-upgrade HTTP responses (401, 404, etc.)
     req.on('response', (res) => {
-      const status = res.statusCode ?? 0;
-      this.emit('error', new Error(`WebSocket upgrade rejected: HTTP ${status}`));
       res.resume(); // drain
       this.handleDisconnect();
     });
@@ -122,7 +122,7 @@ export class WsClient extends EventEmitter {
     req.on('error', () => this.handleDisconnect());
     req.setTimeout(10000, () => {
       req.destroy();
-      this.handleDisconnect();
+      // Don't call handleDisconnect here — req.on('error') will fire
     });
     req.end();
   }
@@ -178,8 +178,18 @@ export class WsClient extends EventEmitter {
   }
 
   private handleDisconnect(): void {
-    if (this.pingInterval) clearInterval(this.pingInterval);
-    this.socket = null;
+    // Guard: only process once per disconnect event
+    if (this.disconnecting) return;
+    this.disconnecting = true;
+
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+    if (this.socket) {
+      this.socket.destroy();
+      this.socket = null;
+    }
 
     if (this.destroyed) {
       this.setState('disconnected');
@@ -187,7 +197,9 @@ export class WsClient extends EventEmitter {
     }
 
     this.setState('reconnecting');
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       this.reconnectDelay = Math.min(
         this.reconnectDelay * 2,
         this.maxReconnectDelay

@@ -2,7 +2,7 @@
   "name": "coffeeshop-vscode",
   "displayName": "CoffeeShop — Bree AI Copilot",
   "description": "Bree as your AI coding copilot — develop, debug, and learn together",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "BarkadaBrew",
   "license": "MIT",
   "repository": {
@@ -149,20 +149,14 @@
     "build": "webpack --mode production",
     "watch": "webpack --mode development --watch",
     "dev": "webpack --mode development",
-    "lint": "eslint src/**/*.ts",
     "typecheck": "tsc --noEmit",
-    "package": "vsce package",
-    "test": "vitest run"
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.95.0",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0",
-    "eslint": "^9.0.0",
     "ts-loader": "^9.5.0",
     "typescript": "^5.5.0",
-    "vitest": "^2.0.0",
     "webpack": "^5.95.0",
     "webpack-cli": "^5.1.0",
     "@vscode/vsce": "^3.0.0"
