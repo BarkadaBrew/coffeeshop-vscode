@@ -20,6 +20,13 @@ export class WsClient extends EventEmitter {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private destroyed = false;
   private disconnecting = false; // guard against duplicate handleDisconnect
+  // Pending WS-level pings awaiting pong. Keyed by a short nonce carried in
+  // the ping payload so we can correlate request/response across overlapping
+  // health probes.
+  private pendingPings = new Map<
+    string,
+    { resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(serverUrl: string, token: string) {
     super();
@@ -110,7 +117,14 @@ export class WsClient extends EventEmitter {
           } else if (opcode === 0x08) {
             socket.end();
           } else if (opcode === 0x09) {
+            // Peer ping — reply with pong echoing the payload
             this.sendFrame(0x0a, payload);
+          } else if (opcode === 0x0a) {
+            // Pong — resolve any matching pending ping. The nonce was written
+            // as UTF-8 text into the ping payload; the server echoes it back.
+            const nonce = payload.toString('utf8');
+            this.resolvePing(nonce);
+            this.emit('pong', nonce);
           }
         }
       });
@@ -131,6 +145,51 @@ export class WsClient extends EventEmitter {
     if (!this.socket || this.state !== 'connected') return;
     const data = Buffer.from(JSON.stringify(msg));
     this.sendFrame(0x01, data);
+  }
+
+  /**
+   * Send a WebSocket-level ping frame and await the matching pong.
+   * Rejects on timeout, on socket error, or if the socket isn't connected.
+   *
+   * This is the real liveness check — unlike the HTTP /health endpoint,
+   * this round-trips through the actual agent channel. If the socket is a
+   * half-dead TCP zombie, this will time out even though /health returns 200.
+   */
+  ping(timeoutMs = 5000): Promise<void> {
+    if (!this.socket || this.state !== 'connected') {
+      return Promise.reject(new Error('WS not connected'));
+    }
+    const nonce = crypto.randomBytes(6).toString('hex');
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingPings.delete(nonce);
+        reject(new Error(`WS ping timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pendingPings.set(nonce, { resolve, reject, timer });
+      try {
+        this.sendFrame(0x09, Buffer.from(nonce, 'utf8'));
+      } catch (err) {
+        this.pendingPings.delete(nonce);
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  }
+
+  private resolvePing(nonce: string): void {
+    const pending = this.pendingPings.get(nonce);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingPings.delete(nonce);
+    pending.resolve();
+  }
+
+  private rejectAllPings(reason: string): void {
+    for (const [, pending] of this.pendingPings) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+    }
+    this.pendingPings.clear();
   }
 
   private sendFrame(opcode: number, payload: Buffer): void {
@@ -170,6 +229,7 @@ export class WsClient extends EventEmitter {
     this.destroyed = true;
     if (this.pingInterval) clearInterval(this.pingInterval);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.rejectAllPings('WS disconnected');
     if (this.socket) {
       this.socket.destroy();
       this.socket = null;
@@ -186,6 +246,7 @@ export class WsClient extends EventEmitter {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
+    this.rejectAllPings('WS disconnected');
     if (this.socket) {
       this.socket.destroy();
       this.socket = null;
