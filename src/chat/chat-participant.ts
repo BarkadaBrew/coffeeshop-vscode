@@ -58,6 +58,8 @@ export function registerChatParticipant(
     } catch (err) {
       if (token.isCancellationRequested) return; // user cancelled
       const msg = err instanceof Error ? err.message : String(err);
+      // Surface the failure to the watchdog so it probes + reconnects.
+      connection.reportFailure(err);
       stream.markdown(`\n\n**Error:** ${msg}`);
     } finally {
       cancelListener.dispose();

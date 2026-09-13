@@ -157,6 +157,8 @@ export class BreeChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       const errMsg = err instanceof Error ? err.message : String(err);
+      // Tell the watchdog so it can probe + reconnect instead of sitting on a stale connection.
+      this.connection.reportFailure(err);
       this.postMessage({
         type: 'streamChunk',
         content: `\n\n**Error:** ${errMsg}`,
